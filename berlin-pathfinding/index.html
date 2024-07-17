@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>Berlin Pathfinding</title>
+    <meta
+        name="viewport"
+        content="initial-scale=1,maximum-scale=1,user-scalable=no"
+    >
+    <link
+        href="https://api.mapbox.com/mapbox-gl-js/v3.5.1/mapbox-gl.css"
+        rel="stylesheet"
+    >
+    <script src="https://api.mapbox.com/mapbox-gl-js/v3.5.1/mapbox-gl.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+
+            display: grid;
+            grid-template-columns: 1fr 300px;
+            grid-template-rows: 100%;
+            align-items: stretch;
+
+            font-family: Helvetica, Arial, sans-serif
+        }
+
+        body>* {
+            width: 100%;
+            height: 100%;
+        }
+
+        #solution {
+            display: grid;
+            height: max-content;
+            gap: 12px;
+        }
+
+        #solution h2 {
+            text-align: center;
+        }
+
+        #solution>* {
+            margin-inline: 8px;
+        }
+
+        button {
+            border: none;
+            border-radius: 12px;
+            height: 32px;
+            background: #0079ef;
+            color: white;
+            cursor: pointer;
+            margin-bottom: 8px;
+            width: 100%;
+            margin-top: 8px;
+        }
+
+        button:disabled {
+            background: #878c91;
+            cursor: no-drop;
+        }
+
+        button:not(:disabled):hover {
+            background: #258bf1;
+        }
+
+        #map canvas {
+            cursor: default;
+        }
+
+        #map.node-hover canvas {
+            cursor: pointer;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="map"></div>
+    <div id="solution">
+        <h2> Lösung hier einfügen </h2>
+
+        <div
+            id="graph-loaded"
+            style="display: none"
+        >
+            Graph geladen!
+        </div>
+        <div id="graph-not-loaded">
+            <div> Graph-Datei: </div>
+            <input
+                type="file"
+                id="graphinput"
+            >
+            <button
+                id="load-graph"
+                disabled="disabled"
+            > Graph laden </button>
+        </div>
+
+
+        <hr>
+
+        <div id="solution-not-loaded">
+            <div> Lösungsdatei: </div>
+            <input
+                type="file"
+                id="solutioninput"
+            >
+            <button
+                id="check-solution"
+                disabled="disabled"
+            > Prüfen </button>
+        </div>
+        <div
+            id="solution-loaded"
+            style="display: none"
+        >
+            <button id="remove-solution"> Zurücksetzen </button>
+        </div>
+
+
+
+        <div>
+            <span> Score: </span>
+            <span id="score"> - </span>
+        </div>
+    </div>
+
+    <script>
+        mapboxgl.accessToken = 'pk.eyJ1IjoianZvcnJlaXRlciIsImEiOiJjbGVyMG03Z3AwMmZxNDNtcHVvYmZsZDQ3In0.ztS_H8Ce6g573L4ELzIY1w';
+        const map = new mapboxgl.Map({
+            container: 'map',
+            center: { lat: 52.5200066, lon: 13.404954 },
+            zoom: 11,
+        });
+        map.addControl(new mapboxgl.NavigationControl());
+
+        map.on('load', () => {
+            map.addSource('nodes', {
+                type: 'geojson',
+                data: {
+                    type: "FeatureCollection",
+                    features: []
+                }
+            });
+            map.addLayer({
+                id: 'nodes',
+                type: 'circle',
+                source: 'nodes',
+                paint: {
+                    'circle-radius': 6,
+                    'circle-color': '#A020F0',
+                },
+            });
+
+            map.on('mouseenter', 'nodes', () => {
+                document.querySelector('#map').classList.add('node-hover');
+            });
+
+            map.on('mouseleave', 'nodes', () => {
+                document.querySelector('#map').classList.remove('node-hover');
+            });
+            map.on('click', 'nodes', (e) => {
+                alert(e.features[0].properties.nodeId);
+            });
+
+
+            map.addSource('visited-nodes', {
+                type: 'geojson',
+                data: {
+                    type: "FeatureCollection",
+                    features: []
+                }
+            });
+            map.addLayer({
+                id: 'path-nodes',
+                type: 'circle',
+                source: 'visited-nodes',
+                paint: {
+                    'circle-radius': 2,
+                    'circle-color': '#B42222',
+                },
+            });
+
+            map.addSource('visited-connections', {
+                type: 'geojson',
+                data: {
+                    type: "FeatureCollection",
+                    features: [],
+                },
+            });
+            map.addLayer({
+                id: 'path-connections',
+                type: 'line',
+                source: 'visited-connections',
+                paint: {
+                    'line-color': 'yellow',
+                    'line-opacity': 0.75,
+                    'line-width': 2,
+                },
+            });
+        });
+    </script>
+
+    <script>
+        function distanceEarthKm(lat1, lon1, lat2, lon2) {
+            function deg2rad(deg) { return deg * Math.PI / 180; }
+
+            const radius = 6371e3 / 1000; // earth radius in km
+            const phi1 = deg2rad(lat1);
+            const phi2 = deg2rad(lat2);
+            const phiDelta = deg2rad(lat2 - lat1);
+            const lambdaDelta = deg2rad(lon2 - lon1);
+
+            const a = Math.sin(phiDelta / 2) * Math.sin(phiDelta / 2) +
+                Math.cos(phi1) * Math.cos(phi2) *
+                Math.sin(lambdaDelta / 2) * Math.sin(lambdaDelta / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+            const distance = radius * c;
+
+            return distance;
+        }
+
+        function parseGraph(rawInput) {
+            const lines = rawInput.split('\n').map(l => l.trim());
+            let lineIndex = 0;
+
+            const readCount = () => parseInt(lines[lineIndex++]);
+            const readNode = () => {
+                const line = lines[lineIndex++].split(/\s+/g);
+                return {
+                    id: parseInt(line[0]),
+                    latitude: parseFloat(line[1]),
+                    longitude: parseFloat(line[2]),
+                    outConnections: [],
+                    inConnections: [],
+                };
+            };
+            const readConnection = () => {
+                const line = lines[lineIndex++].split(/\s+/g);
+                return {
+                    fromId: parseInt(line[0]),
+                    toId: parseInt(line[1]),
+                    maxSpeed: parseInt(line[2]),
+                };
+            };
+
+
+            const nodeCount = readCount();
+            const nodes = Array.from({ length: nodeCount }, () => readNode());
+
+            const connectionCount = readCount();
+            const connections = Array.from({ length: connectionCount }, () => readConnection());
+
+            connections.forEach(c => {
+                nodes[c.fromId].outConnections.push(c);
+                nodes[c.toId].inConnections.push(c);
+            });
+
+            return {
+                nodes,
+                connections,
+            };
+        }
+
+        function parseSolution(solution, nodeCount) {
+            const lines = solution.split('\n')
+                .map(l => l.trim())
+                .filter(l => l.length > 0);
+
+            if (lines.length != 2) {
+                throw new Error();
+            }
+
+            const { from, to } = lines[0].match(/^(?<from>\d+)->(?<to>\d+)$/).groups;
+            const fromId = parseInt(from);
+            const toId = parseInt(to);
+
+            const path = lines[1].split(/\s+/g).map(n => parseInt(n));
+            if (path.some(p => isNaN(p) || p < 0 || p >= nodeCount)) {
+                throw new Error();
+            }
+
+            return {
+                fromId,
+                toId,
+                path,
+            };
+        }
+
+        function getSolutionScore(graph, solution) {
+            const { fromId, toId, path } = solution;
+
+            if (fromId != path[0]) {
+                return -1;
+            }
+
+            let score = 0;
+
+            let curNode = graph.nodes[fromId];
+            for (let i = 1; i < path.length; i++) {
+                const nextId = path[i];
+                const nextNode = graph.nodes[nextId];
+
+                const connection = curNode.outConnections.find(c => c.toId == nextId);
+                if (connection == null) {
+                    return -1;
+                }
+
+                score += 1000 * distanceEarthKm(curNode.latitude, curNode.longitude, nextNode.latitude, nextNode.longitude)
+                    / connection.maxSpeed;
+
+                curNode = nextNode;
+            }
+
+            if (curNode != graph.nodes[path[path.length - 1]]) {
+                return -1;
+            }
+
+            return score;
+        }
+
+        setInterval(() => {
+            document.querySelector('#check-solution').disabled = graph == null || document.querySelector('#solutioninput').files.length == 0;
+            document.querySelector('#load-graph').disabled = document.querySelector('#graphinput').files.length == 0;
+        }, 1);
+
+        let graph = null;
+        document.querySelector('#load-graph').addEventListener('click', async () => {
+            try {
+                const rawGraph = await (document.querySelector('#graphinput').files[0].text());
+                graph = parseGraph(rawGraph);
+            } catch (e) {
+                console.error(e);
+                alert('Ein Fehler ist beim Einlesen des Graphs aufgetreten. Bitte prüfe, ob die richtige Datei ausgewählt wurde.');
+                return;
+            }
+
+            document.querySelector('#graph-loaded').style.display = '';
+            document.querySelector('#graph-not-loaded').style.display = 'none';
+
+
+            const nodesSourceData = map.getSource('nodes')._data;
+            nodesSourceData.features = graph.nodes.map(node => ({
+                type: "Feature",
+                properties: {
+                    nodeId: node.id,
+                },
+                geometry: {
+                    type: "Point",
+                    coordinates: [
+                        node.longitude,
+                        node.latitude,
+                    ],
+                },
+            }));
+            map.getSource('nodes').setData(nodesSourceData);
+        });
+
+        document.querySelector('#remove-solution').addEventListener('click', async () => {
+            const visitedNodesSourceData = map.getSource('visited-nodes')._data;
+            visitedNodesSourceData.features = [];
+            map.getSource('visited-nodes').setData(visitedNodesSourceData);
+
+            const visitedConnectionsSourceData = map.getSource('visited-connections')._data;
+            visitedConnectionsSourceData.features = [];
+            map.getSource('visited-connections').setData(visitedConnectionsSourceData);
+            
+            map.setLayoutProperty('nodes', 'visibility', 'visible');
+
+            document.querySelector('#solution-not-loaded').style.display = '';
+            document.querySelector('#solution-loaded').style.display = 'none';
+        });
+
+        document.querySelector('#check-solution').addEventListener('click', async () => {
+            let solution;
+            try {
+                const rawSolution = await (document.querySelector('#solutioninput').files[0].text());
+                solution = parseSolution(rawSolution, graph.nodes.length);
+            } catch (e) {
+                console.error(e);
+                alert('Ein Fehler ist beim Parsen der Lösung aufgetreten. Bitte prüfe, ob Lösung im richtigen Format vorliegt.');
+                return;
+            }
+
+            const score = getSolutionScore(graph, solution);
+            if (score < 0) {
+                alert('Die Lösung ist nicht gültig');
+                return;
+            }
+
+            document.querySelector('#solution-loaded').style.display = '';
+            document.querySelector('#solution-not-loaded').style.display = 'none';
+
+            const visitedNodesSourceData = map.getSource('visited-nodes')._data;
+            visitedNodesSourceData.features = solution.path.map(id => {
+                const node = graph.nodes[id];
+                return {
+                    type: "Feature",
+                    properties: {},
+                    geometry: {
+                        type: "Point",
+                        coordinates: [
+                            node.longitude,
+                            node.latitude,
+                        ],
+                    },
+                };
+            });
+            map.getSource('visited-nodes').setData(visitedNodesSourceData);
+
+            const visitedConnectionsSourceData = map.getSource('visited-connections')._data;
+            visitedConnectionsSourceData.features = [{
+                type: "Feature",
+                properties: {},
+                geometry: {
+                    type: "LineString",
+                    coordinates: solution.path.map(id => {
+                        const node = graph.nodes[id];
+                        return [
+                            node.longitude,
+                            node.latitude,
+                        ];
+                    }),
+                },
+            }];
+            map.getSource('visited-connections').setData(visitedConnectionsSourceData);
+
+
+            const startNode = graph.nodes[solution.fromId];
+            map.easeTo({
+                center: {
+                    lat: startNode.latitude,
+                    lon: startNode.longitude,
+                },
+                zoom: 13,
+                duration: 1_000,
+            });
+
+            document.querySelector('#score').textContent = score.toFixed(3);
+
+            map.setLayoutProperty('nodes', 'visibility', 'none');
+        });
+
+
+    </script>
+</body>
+
+</html>
