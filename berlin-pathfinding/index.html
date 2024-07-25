@@ -175,6 +175,22 @@
                     "line-width": 2,
                 },
             });
+
+
+            const updateCircleSize = () => {
+                const zoom = map.getZoom();
+
+                const zoomRange = { min: 10, max: 15 };
+                const radiusRange = { min: 1, max: 6 };
+
+                const radiusFactor = (Math.min(zoomRange.max, Math.max(zoom, zoomRange.min)) - zoomRange.min) / (zoomRange.max - zoomRange.min);
+                const radius = radiusRange.min + (radiusRange.max - radiusRange.min) * radiusFactor ** 2;
+
+                map.setPaintProperty('nodes', 'circle-radius', radius);
+            };
+
+            map.on('zoom', () => updateCircleSize());
+            updateCircleSize();
         });
     </script>
 
@@ -447,13 +463,13 @@
                 map.setLayoutProperty("nodes", "visibility", "none");
             });
 
-            function formtDuration(durationH) {
-                const hours = Math.trunc(durationH);
-                const minutes = Math.trunc(durationH * 60 - hours * 60);
-                const seconds = Math.trunc(durationH * 60 * 60 - hours * 60 * 60 - minutes*60);
+        function formtDuration(durationH) {
+            const hours = Math.trunc(durationH);
+            const minutes = Math.trunc(durationH * 60 - hours * 60);
+            const seconds = Math.trunc(durationH * 60 * 60 - hours * 60 * 60 - minutes * 60);
 
-                return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-            }
+            return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }
     </script>
 </body>
 
