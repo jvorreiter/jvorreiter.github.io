@@ -74,11 +74,21 @@
 <body>
     <div id="map"></div>
     <div id="side">
-        <div id="graph-loaded" style="display: none">Graph geladen!</div>
-        <div id="graph-not-loaded">
-            <div>Graph-Datei:</div>
-            <input type="file" id="graphinput" />
-            <button id="load-graph" disabled="disabled">Graph laden</button>
+        <div>
+            <label style="display: block; margin-bottom: 8px;">
+                <input type="checkbox" id="render-graph-checkbox" checked />
+                Knoten des Graphen anzeigen
+            </label>
+
+            <div id="graph-loaded" style="display: none">
+                Graph geladen!
+                (<span id="graph-node-count">-</span> Knoten)
+            </div>
+            <div id="graph-not-loaded">
+                <div>Graph-Datei:</div>
+                <input type="file" id="graphinput" />
+                <button id="load-graph" disabled="disabled">Graph laden</button>
+            </div>
         </div>
 
         <hr />
@@ -96,6 +106,10 @@
             <div>
                 <span> optimistisch geschätzte Dauer: </span>
                 <b id="score-duration"> - </b>
+            </div>
+            <div>
+                <span> Kreuzungen: </span>
+                <b id="score-crossings"> - </b>
             </div>
 
             <button id="remove-solution">Zurücksetzen</button>
@@ -304,6 +318,7 @@
                 distanceKm: 0,
                 durationH: 0,
                 averageKmh: 0,
+                crossings: 0,
             };
 
             let curNode = graph.nodes[fromId];
@@ -326,6 +341,10 @@
                 scores.durationH += distanceKm / connection.maxSpeed;
                 scores.averageKmh += distanceKm * connection.maxSpeed;
 
+                if(curNode.outConnections.filter(c => c.toId != nextId).length > 1) {
+                    scores.crossings++;
+                }
+
                 curNode = nextNode;
             }
 
@@ -344,132 +363,144 @@
         }, 1);
 
         let graph = null;
-        document
-            .querySelector("#load-graph")
-            .addEventListener("click", async () => {
-                try {
-                    const rawGraph = await document.querySelector("#graphinput").files[0].text();
-                    graph = parseGraph(rawGraph);
-                } catch (e) {
-                    console.error(e);
-                    alert(
-                        "Ein Fehler ist beim Einlesen des Graphs aufgetreten. Bitte prüfe, ob die richtige Datei ausgewählt wurde."
-                    );
-                    return;
-                }
+        document.querySelector("#load-graph").addEventListener("click", async () => {
+            try {
+                const rawGraph = await document.querySelector("#graphinput").files[0].text();
+                graph = parseGraph(rawGraph);
+            } catch (e) {
+                console.error(e);
+                alert(
+                    "Ein Fehler ist beim Einlesen des Graphs aufgetreten. Bitte prüfe, ob die richtige Datei ausgewählt wurde."
+                );
+                return;
+            }
 
-                document.querySelector("#graph-loaded").style.display = "";
-                document.querySelector("#graph-not-loaded").style.display = "none";
+            document.querySelector("#graph-loaded").style.display = "";
+            document.querySelector("#graph-not-loaded").style.display = "none";
 
-                const nodesSourceData = map.getSource("nodes")._data;
-                nodesSourceData.features = graph.nodes.map((node) => ({
+            document.querySelector('#graph-node-count').textContent = graph.nodes.length;
+
+            const nodesSourceData = map.getSource("nodes")._data;
+            nodesSourceData.features = graph.nodes.map((node) => ({
+                type: "Feature",
+                properties: {
+                    nodeId: node.id,
+                },
+                geometry: {
+                    type: "Point",
+                    coordinates: [node.longitude, node.latitude],
+                },
+            }));
+            map.getSource("nodes").setData(nodesSourceData);
+        });
+
+        document.querySelector("#remove-solution").addEventListener("click", async () => {
+            const visitedNodesSourceData = map.getSource("visited-nodes")._data;
+            visitedNodesSourceData.features = [];
+            map.getSource("visited-nodes").setData(visitedNodesSourceData);
+
+            const visitedConnectionsSourceData = map.getSource("visited-connections")._data;
+            visitedConnectionsSourceData.features = [];
+            map.getSource("visited-connections").setData(visitedConnectionsSourceData);
+
+            isSolutionLoaded = false;
+            updateNodeLayerVisibility();
+
+            document.querySelector("#solution-not-loaded").style.display = "";
+            document.querySelector("#solution-loaded").style.display = "none";
+        });
+
+        let isSolutionLoaded = false;
+
+        document.querySelector("#check-solution").addEventListener("click", async () => {
+            let solution;
+            try {
+                const rawSolution = await document.querySelector("#solutioninput").files[0].text();
+                solution = parseSolution(rawSolution, graph.nodes.length);
+            } catch (e) {
+                console.error(e);
+                alert(
+                    "Ein Fehler ist beim Parsen der Lösung aufgetreten. Bitte prüfe, ob Lösung im richtigen Format vorliegt."
+                );
+                return;
+            }
+
+            const score = getSolutionScores(graph, solution);
+            if (score == null) {
+                alert("Die Lösung ist nicht gültig");
+                return;
+            }
+            console.log(score);
+
+            document.querySelector("#solution-loaded").style.display = "";
+            document.querySelector("#solution-not-loaded").style.display = "none";
+
+            const visitedNodesSourceData = map.getSource("visited-nodes")._data;
+            visitedNodesSourceData.features = solution.path.map((id) => {
+                const node = graph.nodes[id];
+                return {
                     type: "Feature",
-                    properties: {
-                        nodeId: node.id,
-                    },
+                    properties: {},
                     geometry: {
                         type: "Point",
                         coordinates: [node.longitude, node.latitude],
                     },
-                }));
-                map.getSource("nodes").setData(nodesSourceData);
+                };
             });
+            map.getSource("visited-nodes").setData(visitedNodesSourceData);
 
-        document
-            .querySelector("#remove-solution")
-            .addEventListener("click", async () => {
-                const visitedNodesSourceData = map.getSource("visited-nodes")._data;
-                visitedNodesSourceData.features = [];
-                map.getSource("visited-nodes").setData(visitedNodesSourceData);
-
-                const visitedConnectionsSourceData = map.getSource("visited-connections")._data;
-                visitedConnectionsSourceData.features = [];
-                map.getSource("visited-connections").setData(visitedConnectionsSourceData);
-
-                map.setLayoutProperty("nodes", "visibility", "visible");
-
-                document.querySelector("#solution-not-loaded").style.display = "";
-                document.querySelector("#solution-loaded").style.display = "none";
-            });
-
-        document
-            .querySelector("#check-solution")
-            .addEventListener("click", async () => {
-                let solution;
-                try {
-                    const rawSolution = await document.querySelector("#solutioninput").files[0].text();
-                    solution = parseSolution(rawSolution, graph.nodes.length);
-                } catch (e) {
-                    console.error(e);
-                    alert(
-                        "Ein Fehler ist beim Parsen der Lösung aufgetreten. Bitte prüfe, ob Lösung im richtigen Format vorliegt."
-                    );
-                    return;
-                }
-
-                const score = getSolutionScores(graph, solution);
-                if (score == null) {
-                    alert("Die Lösung ist nicht gültig");
-                    return;
-                }
-                console.log(score);
-
-                document.querySelector("#solution-loaded").style.display = "";
-                document.querySelector("#solution-not-loaded").style.display = "none";
-
-                const visitedNodesSourceData = map.getSource("visited-nodes")._data;
-                visitedNodesSourceData.features = solution.path.map((id) => {
-                    const node = graph.nodes[id];
-                    return {
-                        type: "Feature",
-                        properties: {},
-                        geometry: {
-                            type: "Point",
-                            coordinates: [node.longitude, node.latitude],
-                        },
-                    };
-                });
-                map.getSource("visited-nodes").setData(visitedNodesSourceData);
-
-                const visitedConnectionsSourceData = map.getSource("visited-connections")._data;
-                visitedConnectionsSourceData.features = [
-                    {
-                        type: "Feature",
-                        properties: {},
-                        geometry: {
-                            type: "LineString",
-                            coordinates: solution.path.map((id) => {
-                                const node = graph.nodes[id];
-                                return [node.longitude, node.latitude];
-                            }),
-                        },
+            const visitedConnectionsSourceData = map.getSource("visited-connections")._data;
+            visitedConnectionsSourceData.features = [
+                {
+                    type: "Feature",
+                    properties: {},
+                    geometry: {
+                        type: "LineString",
+                        coordinates: solution.path.map((id) => {
+                            const node = graph.nodes[id];
+                            return [node.longitude, node.latitude];
+                        }),
                     },
-                ];
-                map.getSource("visited-connections").setData(visitedConnectionsSourceData);
+                },
+            ];
+            map.getSource("visited-connections").setData(visitedConnectionsSourceData);
 
-                const startNode = graph.nodes[solution.fromId];
-                map.easeTo({
-                    center: {
-                        lat: startNode.latitude,
-                        lon: startNode.longitude,
-                    },
-                    zoom: 13,
-                    duration: 1_000,
-                });
-
-                document.querySelector("#score-distance").textContent = `${score.distanceKm.toFixed(3)}km`;
-                document.querySelector("#score-duration").textContent = formtDuration(score.durationH);
-
-                map.setLayoutProperty("nodes", "visibility", "none");
+            const startNode = graph.nodes[solution.fromId];
+            map.easeTo({
+                center: {
+                    lat: startNode.latitude,
+                    lon: startNode.longitude,
+                },
+                zoom: 13,
+                duration: 1_000,
             });
 
-        function formtDuration(durationH) {
+            document.querySelector("#score-distance").textContent = `${score.distanceKm.toFixed(3)}km`;
+            document.querySelector("#score-duration").textContent = formatDuration(score.durationH);
+            document.querySelector("#score-crossings").textContent = score.crossings;
+
+            isSolutionLoaded = true;
+            updateNodeLayerVisibility();
+        });
+
+        function formatDuration(durationH) {
             const hours = Math.trunc(durationH);
             const minutes = Math.trunc(durationH * 60 - hours * 60);
             const seconds = Math.trunc(durationH * 60 * 60 - hours * 60 * 60 - minutes * 60);
 
             return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
         }
+        
+        function updateNodeLayerVisibility() {
+            const visible = shouldRenderNodes && !isSolutionLoaded;
+            map.setLayoutProperty('nodes', 'visibility', visible ? 'visible' : 'none');
+        }
+
+        let shouldRenderNodes = false;
+        document.querySelector("#render-graph-checkbox").addEventListener("click",  (e) => {
+            shouldRenderNodes = e.target.checked;
+            updateNodeLayerVisibility();
+        });
     </script>
 </body>
 
